@@ -24,19 +24,31 @@ async function fetchTrendingNews() {
   }
 }
 
-async function scrapeArticleContent(page, url) {
+async function scrapeArticleContent(page, url, title, summary) {
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    
-    const content = await page.evaluate(() => {
-      const articleBody = document.querySelector('article') || document.querySelector('.article-body') || document.querySelector('main');
-      return articleBody ? articleBody.innerText : 'Could not extract content';
+    await page.setExtraHTTPHeaders({
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     });
 
-    return content;
+    await page.goto(url, { 
+      waitUntil: 'networkidle2',
+      timeout: 60000 // Increase timeout to 60 seconds
+    });
+
+    const content = await page.evaluate(() => {
+      const articleBody = document.querySelector('article') || document.querySelector('.article-body') || document.querySelector('main');
+      return articleBody ? articleBody.innerText : null;
+    });
+
+    if (content) {
+      return content;
+    } else {
+      console.log(`Couldn't extract content for: ${title}. Using summary instead.`);
+      return summary || 'No content available.';
+    }
   } catch (error) {
     console.error(`Error scraping content from ${url}:`, error.message);
-    return 'Error fetching content.';
+    return summary || 'Error fetching content.';
   }
 }
 
@@ -46,7 +58,7 @@ async function fetchAndScrapeNews() {
   const articles = await fetchTrendingNews();
 
   const scrapedArticles = await Promise.all(articles.map(async (article) => {
-    const content = await scrapeArticleContent(page, article.url);
+    const content = await scrapeArticleContent(page, article.url, article.title, article.currencies[0]?.title);
     return {
       title: article.title,
       url: article.url,
