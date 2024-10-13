@@ -1,79 +1,70 @@
 const axios = require('axios');
-const cheerio = require('cheerio');
+const { chromium } = require('playwright');
 
+const CRYPTOPANIC_API_KEY = 'YOUR_API_KEY_HERE'; // Replace with your actual API key
 const CRYPTOPANIC_API_URL = 'https://cryptopanic.com/api/v1/posts/';
+const MAKE_WEBHOOK_URL = 'https://hook.eu2.make.com/1m8yqc7djp5n424luitgca3m6sch4c0p';
 
-async function fetchTopNewsUrls() {
-  const apiKey = '59abb8cd1cee2a0f087b0299a24c6f3a71665213';
-  const params = {
-    auth_token: apiKey,
-    filter: 'popular',
-    public: 'true',
-    kind: 'news',
-    regions: 'en',
-    timeframe: '48h'
-  };
-
+async function fetchTrendingNews() {
   try {
-    const response = await axios.get(CRYPTOPANIC_API_URL, { params });
-    return response.data.results.slice(0, 10).map(article => ({
-      title: article.title,
-      url: article.url,
-      published_at: article.published_at,
-      sentiment: article.votes
-    }));
+    const response = await axios.get(CRYPTOPANIC_API_URL, {
+      params: {
+        auth_token: CRYPTOPANIC_API_KEY,
+        public: 'true',
+        sort: 'trending',
+        limit: 10
+      }
+    });
+    return response.data.results;
   } catch (error) {
-    console.error('Error fetching CryptoPanic news:', error.message);
+    console.error('Error fetching from CryptoPanic API:', error.message);
     return [];
   }
 }
 
-async function scrapeArticleContent(url) {
+async function scrapeArticleContent(page, url) {
   try {
-    const response = await axios.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      timeout: 10000
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    
+    const content = await page.evaluate(() => {
+      const articleBody = document.querySelector('article') || document.querySelector('.article-body') || document.querySelector('main');
+      return articleBody ? articleBody.innerText : 'Could not extract content';
     });
-    const $ = cheerio.load(response.data);
-    
-    let content = $('.description .description-body p').text().trim();
-    
-    if (!content) {
-      content = $('article p').text().trim() || $('body p').text().trim();
-    }
 
-    return content || 'No content found.';
+    return content;
   } catch (error) {
     console.error(`Error scraping content from ${url}:`, error.message);
-    return `Error fetching content: ${error.message}`;
+    return 'Error: Could not scrape content';
   }
 }
 
-async function fetchAndScrapeNews() {
-  const articles = await fetchTopNewsUrls();
-  const scrapedArticles = await Promise.all(articles.map(async (article, index) => {
-    const content = await scrapeArticleContent(article.url);
-    return {
-      rank: index + 1,
-      ...article,
-      content: content
-    };
-  }));
+async function main() {
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
 
-  return scrapedArticles;
+  try {
+    const trendingNews = await fetchTrendingNews();
+    
+    for (const article of trendingNews) {
+      const fullContent = await scrapeArticleContent(page, article.url);
+      
+      const articleData = {
+        title: article.title,
+        url: article.url,
+        published_at: article.published_at,
+        source: article.source.title,
+        content: fullContent
+      };
+
+      // Send data to Make.com webhook
+      await axios.post(MAKE_WEBHOOK_URL, articleData);
+      console.log(`Sent article to webhook: ${articleData.title}`);
+    }
+  } catch (error) {
+    console.error('Error in main process:', error.message);
+  } finally {
+    await browser.close();
+  }
 }
 
-// Execute the function and log results
-fetchAndScrapeNews().then(news => {
-  news.forEach(article => {
-    console.log(`Rank: ${article.rank}`);
-    console.log(`Title: ${article.title}`);
-    console.log(`URL: ${article.url}`);
-    console.log(`Published at: ${article.published_at}`);
-    console.log(`Sentiment:`, article.sentiment);
-    console.log(`Content: ${article.content}`);
-    console.log('\n' + '-'.repeat(50) + '\n');
-  });
-}).catch(error => {
-  console.error('Error:', error.message);
-});
+main();
