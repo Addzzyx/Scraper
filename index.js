@@ -5,49 +5,45 @@ const axios = require('axios');
     const browser = await chromium.launch();
     const page = await browser.newPage();
 
-    // Step 1: Go to CryptoPanic's trending section (you can adjust the URL for top/trending)
-    await page.goto('https://cryptopanic.com/news/trending/');
+    // Navigate to the page you want to scrape (e.g., trending articles on CryptoPanic)
+    await page.goto('https://cryptopanic.com/');
 
-    // Step 2: Get the top 3 article links (you can loop for more or adjust the number)
+    // Wait for the news item titles
+    await page.waitForSelector('.news-item .title a');
+
+    // Scrape the top 3 article titles and links
     const articleLinks = await page.evaluate(() => {
-        return Array.from(document.querySelectorAll('.title a')).slice(0, 3).map(link => ({
+        return Array.from(document.querySelectorAll('.news-item .title a')).slice(0, 3).map(link => ({
             title: link.innerText,
             href: link.href
         }));
     });
 
-    console.log('Trending Articles:', articleLinks);
-
-    let articlesData = [];
-
+    // Now, for each article, scrape its metadata
+    const articlesWithMeta = [];
     for (const article of articleLinks) {
-        try {
-            // Step 3: Navigate to the external article
-            await page.goto(article.href);
+        await page.goto(article.href);
 
-            // Step 4: Scrape the full article (adjust selectors for different websites)
-            const fullArticle = await page.evaluate(() => {
-                // Change this selector based on the source website's structure
-                const articleContent = document.querySelector('div.article-content');
-                return articleContent ? articleContent.innerText : 'No content found';
-            });
+        const metadata = await page.evaluate(() => {
+            const getMetaTag = (name) => document.querySelector(`meta[name="${name}"]`)?.content || document.querySelector(`meta[property="${name}"]`)?.content || '';
 
-            console.log(`Article from ${article.href}:`, fullArticle);
+            return {
+                title: document.title,
+                description: getMetaTag('description'),
+                ogTitle: getMetaTag('og:title'),
+                ogImage: getMetaTag('og:image'),
+                ogDescription: getMetaTag('og:description')
+            };
+        });
 
-            // Collect data for Make.com
-            articlesData.push({
-                title: article.title,
-                link: article.href,
-                fullArticle: fullArticle
-            });
-        } catch (err) {
-            console.error(`Error scraping ${article.href}:`, err);
-        }
+        articlesWithMeta.push({ ...article, ...metadata });
     }
 
-    // Step 5: Send the collected articles data to Make.com webhook (Replace with your actual webhook URL)
-    await axios.post('https://hook.eu2.make.com/1m8yqc7djp5n424luitgca3m6sch4c0p', {
-        articles: articlesData
+    console.log('Scraped Articles with Metadata:', articlesWithMeta);
+
+    // Send the scraped articles and metadata to Make.com
+    await axios.post('https://hook.eu2.make.com/your-custom-webhook-url', {
+        articles: articlesWithMeta
     });
 
     // Close the browser
