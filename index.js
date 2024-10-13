@@ -17,7 +17,8 @@ async function fetchTrendingNews() {
 
   try {
     const response = await axios.get(CRYPTOPANIC_API_URL, { params });
-    return response.data.results.slice(0, 10); // Limit to top 10 trending articles
+    console.log(`Fetched ${response.data.results.length} articles from CryptoPanic API`);
+    return response.data.results.slice(0, 10);
   } catch (error) {
     console.error('Error fetching CryptoPanic news:', error.message);
     return [];
@@ -31,8 +32,8 @@ async function scrapeArticleContent(page, url, title, summary) {
     });
 
     await page.goto(url, { 
-      waitUntil: 'networkidle2',
-      timeout: 60000 // Increase timeout to 60 seconds
+      waitUntil: 'networkidle',
+      timeout: 60000
     });
 
     const content = await page.evaluate(() => {
@@ -58,7 +59,7 @@ async function fetchAndScrapeNews() {
   const articles = await fetchTrendingNews();
 
   const scrapedArticles = await Promise.all(articles.map(async (article) => {
-    const content = await scrapeArticleContent(page, article.url, article.title, article.currencies[0]?.title);
+    const content = await scrapeArticleContent(page, article.url, article.title, article.currencies?.[0]?.title);
     return {
       title: article.title,
       url: article.url,
