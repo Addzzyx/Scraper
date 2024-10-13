@@ -1,0 +1,13 @@
+{
+  "name": "scraper",
+  "version": "1.0.0",
+  "description": "A Playwright scraper for CryptoPanic",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0",
+    "axios": "^1.7.7"
+  }
+}
