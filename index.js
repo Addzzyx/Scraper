@@ -1,7 +1,5 @@
 const { chromium } = require('playwright');
 const axios = require('axios');
-const { JSDOM } = require('jsdom');
-const { Readability } = require('@mozilla/readability');
 
 const CRYPTOPANIC_API_URL = 'https://cryptopanic.com/api/v1/posts/';
 const CRYPTOPANIC_API_KEY = process.env.CRYPTOPANIC_API_KEY;
@@ -20,8 +18,7 @@ async function fetchTrendingNewsUrls() {
         const response = await axios.get(CRYPTOPANIC_API_URL, { params });
         return response.data.results.slice(0, 10).map(article => ({
             title: article.title,
-            external_url: article.url,
-            crypto_panic_url: article.source_url || article.url,
+            crypto_panic_url: article.url,
             source_name: article.source.title,
             published_at: article.published_at
         }));
@@ -34,7 +31,20 @@ async function fetchTrendingNewsUrls() {
 async function getExternalLink(page, url) {
     try {
         await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
-        return page.url(); // Final URL after redirects
+        
+        // Extract the redirect URL
+        const redirectUrl = await page.evaluate(() => {
+            const link = document.querySelector('a[href^="/news/click/"]');
+            return link ? new URL(link.getAttribute('href'), window.location.origin).href : null;
+        });
+
+        if (redirectUrl) {
+            // Follow the redirect
+            await page.goto(redirectUrl, { waitUntil: 'networkidle', timeout: 60000 });
+            return page.url(); // This will be the final URL after redirect
+        }
+
+        return null;
     } catch (error) {
         console.error(`Error getting external link from ${url}:`, error.message);
         return null;
@@ -44,23 +54,26 @@ async function getExternalLink(page, url) {
 async function scrapeArticleContent(page, url) {
     try {
         await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
-        const html = await page.content();
-        const dom = new JSDOM(html, { url });
-        const article = new Readability(dom.window.document).parse();
         
-        if (article && article.textContent) {
-            return article.textContent.trim().slice(0, 1000);
-        }
-        
-        // Fallback method
-        return await page.evaluate(() => {
-            const selectors = ['article', '.article-body', '.post-content', 'main', '.entry-content'];
+        const content = await page.evaluate(() => {
+            const selectors = [
+                'article',
+                '.article-body',
+                '.post-content',
+                'main',
+                '.entry-content',
+                '#content'
+            ];
             for (const selector of selectors) {
                 const element = document.querySelector(selector);
-                if (element) return element.innerText.trim().slice(0, 1000);
+                if (element) return element.innerText.trim();
             }
-            return document.body.innerText.trim().slice(0, 1000);
+            // If no matching selector, try to get all paragraph text
+            const paragraphs = Array.from(document.querySelectorAll('p')).map(p => p.innerText).join('\n\n');
+            return paragraphs || 'Failed to extract article content';
         });
+
+        return content.slice(0, 1000) + (content.length > 1000 ? '...' : '');
     } catch (error) {
         console.error(`Error scraping content from ${url}:`, error.message);
         return 'Failed to extract article content';
@@ -72,13 +85,20 @@ async function scrapeAndSendNews() {
     const page = await browser.newPage();
     const articles = await fetchTrendingNewsUrls();
 
-    for (const article of articles) {
-        let externalUrl = article.external_url;
-        if (!externalUrl) {
-            externalUrl = await getExternalLink(page, article.crypto_panic_url);
-        }
+    console.log(`Fetched ${articles.length} articles from CryptoPanic API`);
 
-        const content = externalUrl ? await scrapeArticleContent(page, externalUrl) : 'Failed to get external URL';
+    for (const article of articles) {
+        console.log(`Processing article: ${article.title}`);
+        
+        const externalUrl = await getExternalLink(page, article.crypto_panic_url);
+        console.log(`Original URL: ${article.crypto_panic_url}`);
+        console.log(`External URL: ${externalUrl}`);
+
+        let content = 'Failed to extract content';
+        if (externalUrl) {
+            content = await scrapeArticleContent(page, externalUrl);
+            console.log(`Scraped content length: ${content.length} characters`);
+        }
 
         const scrapedArticle = {
             title: article.title,
@@ -96,6 +116,7 @@ async function scrapeAndSendNews() {
             console.error(`Failed to send to webhook: ${article.title}`, error.message);
         }
     }
+
     await browser.close();
 }
 
