@@ -24,8 +24,8 @@ jobs:
     - name: Install dependencies
       run: npm install
 
-    - name: Install Playwright browsers
-      run: npx playwright install chromium
+    - name: Install Playwright Browsers
+      run: npx playwright install
 
     - name: Run scraping script
       run: node index.js
