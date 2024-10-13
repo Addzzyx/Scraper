@@ -6,7 +6,6 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
@@ -16,8 +15,14 @@ jobs:
       with:
         node-version: '18'
 
+    - name: Create package.json if not exists
+      run: |
+        if [ ! -f package.json ]; then
+          echo '{"name":"scraper","dependencies":{"playwright":"^1.38.0","axios":"^1.5.0"}}' > package.json
+        fi
+
     - name: Install dependencies
       run: npm install
 
-    - name: Run scraper
+    - name: Run scraping script
       run: node index.js
