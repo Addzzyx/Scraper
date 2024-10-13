@@ -1,25 +1,28 @@
-name: Fetch and Scrape CryptoPanic News
+name: CryptoPanic Scraper
+
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'  # Runs every 6 hours
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
+
     - name: Set up Node.js
       uses: actions/setup-node@v3
       with:
         node-version: '18'
-    - name: Create package.json if not exists
-      run: |
-        if [ ! -f package.json ]; then
-          echo '{"name":"scraper","dependencies":{"axios":"^1.5.0","playwright":"^1.38.0"}}' > package.json
-        fi
+
     - name: Install dependencies
       run: npm install
+
     - name: Install Playwright browsers
       run: npx playwright install chromium
+
     - name: Run scraping script
       env:
         CRYPTOPANIC_API_KEY: ${{ secrets.CRYPTOPANIC_API_KEY }}
