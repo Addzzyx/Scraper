@@ -1,4 +1,4 @@
-name: Playwright Scraper
+name: Fetch and Scrape CryptoPanic News
 
 on:
   workflow_dispatch:
@@ -18,14 +18,11 @@ jobs:
     - name: Create package.json if not exists
       run: |
         if [ ! -f package.json ]; then
-          echo '{"name":"scraper","dependencies":{"playwright":"^1.38.0","axios":"^1.5.0"}}' > package.json
+          echo '{"name":"scraper","dependencies":{"axios":"^1.5.0","cheerio":"^1.0.0"}}' > package.json
         fi
 
     - name: Install dependencies
       run: npm install
-
-    - name: Install Playwright browsers
-      run: npx playwright install chromium
 
     - name: Run scraping script
       run: node index.js
