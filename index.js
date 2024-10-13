@@ -1,51 +1,79 @@
-const { chromium } = require('playwright');
 const axios = require('axios');
+const cheerio = require('cheerio');
 
-(async () => {
-    const browser = await chromium.launch();
-    const page = await browser.newPage();
+const CRYPTOPANIC_API_URL = 'https://cryptopanic.com/api/v1/posts/';
 
-    // Navigate to the page and wait for it to fully load
-    await page.goto('https://cryptopanic.com/', { waitUntil: 'networkidle0' });
+async function fetchTopNewsUrls() {
+  const apiKey = '59abb8cd1cee2a0f087b0299a24c6f3a71665213';
+  const params = {
+    auth_token: apiKey,
+    filter: 'popular',
+    public: 'true',
+    kind: 'news',
+    regions: 'en',
+    timeframe: '48h'
+  };
 
-    // Wait for the news item titles with increased timeout
-    await page.waitForSelector('.news-item .title a', { timeout: 60000 });
+  try {
+    const response = await axios.get(CRYPTOPANIC_API_URL, { params });
+    return response.data.results.slice(0, 10).map(article => ({
+      title: article.title,
+      url: article.url,
+      published_at: article.published_at,
+      sentiment: article.votes
+    }));
+  } catch (error) {
+    console.error('Error fetching CryptoPanic news:', error.message);
+    return [];
+  }
+}
 
-    // Scrape the top 3 article titles and links
-    const articleLinks = await page.evaluate(() => {
-        return Array.from(document.querySelectorAll('.news-item .title a')).slice(0, 3).map(link => ({
-            title: link.innerText,
-            href: link.href
-        }));
+async function scrapeArticleContent(url) {
+  try {
+    const response = await axios.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      timeout: 10000
     });
-
-    // Now, for each article, scrape its metadata
-    const articlesWithMeta = [];
-    for (const article of articleLinks) {
-        await page.goto(article.href, { waitUntil: 'networkidle0' });
-
-        const metadata = await page.evaluate(() => {
-            const getMetaTag = (name) => document.querySelector(`meta[name="${name}"]`)?.content || document.querySelector(`meta[property="${name}"]`)?.content || '';
-
-            return {
-                title: document.title,
-                description: getMetaTag('description'),
-                ogTitle: getMetaTag('og:title'),
-                ogImage: getMetaTag('og:image'),
-                ogDescription: getMetaTag('og:description')
-            };
-        });
-
-        articlesWithMeta.push({ ...article, ...metadata });
+    const $ = cheerio.load(response.data);
+    
+    let content = $('.description .description-body p').text().trim();
+    
+    if (!content) {
+      content = $('article p').text().trim() || $('body p').text().trim();
     }
 
-    console.log('Scraped Articles with Metadata:', articlesWithMeta);
+    return content || 'No content found.';
+  } catch (error) {
+    console.error(`Error scraping content from ${url}:`, error.message);
+    return `Error fetching content: ${error.message}`;
+  }
+}
 
-    // Send the scraped articles and metadata to Make.com
-    await axios.post('https://hook.eu2.make.com/your-custom-webhook-url', {
-        articles: articlesWithMeta
-    });
+async function fetchAndScrapeNews() {
+  const articles = await fetchTopNewsUrls();
+  const scrapedArticles = await Promise.all(articles.map(async (article, index) => {
+    const content = await scrapeArticleContent(article.url);
+    return {
+      rank: index + 1,
+      ...article,
+      content: content
+    };
+  }));
 
-    // Close the browser
-    await browser.close();
-})();
+  return scrapedArticles;
+}
+
+// Execute the function and log results
+fetchAndScrapeNews().then(news => {
+  news.forEach(article => {
+    console.log(`Rank: ${article.rank}`);
+    console.log(`Title: ${article.title}`);
+    console.log(`URL: ${article.url}`);
+    console.log(`Published at: ${article.published_at}`);
+    console.log(`Sentiment:`, article.sentiment);
+    console.log(`Content: ${article.content}`);
+    console.log('\n' + '-'.repeat(50) + '\n');
+  });
+}).catch(error => {
+  console.error('Error:', error.message);
+});
