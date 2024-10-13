@@ -5,17 +5,49 @@ const axios = require('axios');
     const browser = await chromium.launch();
     const page = await browser.newPage();
 
-    // Navigate to the page you want to scrape
-    await page.goto('https://cryptopanic.com/news/19997988/Whales-Hoard-90-Million-In-Bitcoin-A-Sign-Of-Whats-To-Come');
+    // Step 1: Go to CryptoPanic's trending section (you can adjust the URL for top/trending)
+    await page.goto('https://cryptopanic.com/news/trending/');
 
-    // Wait for the element containing the article description
-    const articleDescription = await page.locator('.description-body p').innerText();
+    // Step 2: Get the top 3 article links (you can loop for more or adjust the number)
+    const articleLinks = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('.title a')).slice(0, 3).map(link => ({
+            title: link.innerText,
+            href: link.href
+        }));
+    });
 
-    console.log('Article Description:', articleDescription);
+    console.log('Trending Articles:', articleLinks);
 
-    // Post the scraped data to your Make.com webhook
+    let articlesData = [];
+
+    for (const article of articleLinks) {
+        try {
+            // Step 3: Navigate to the external article
+            await page.goto(article.href);
+
+            // Step 4: Scrape the full article (adjust selectors for different websites)
+            const fullArticle = await page.evaluate(() => {
+                // Change this selector based on the source website's structure
+                const articleContent = document.querySelector('div.article-content');
+                return articleContent ? articleContent.innerText : 'No content found';
+            });
+
+            console.log(`Article from ${article.href}:`, fullArticle);
+
+            // Collect data for Make.com
+            articlesData.push({
+                title: article.title,
+                link: article.href,
+                fullArticle: fullArticle
+            });
+        } catch (err) {
+            console.error(`Error scraping ${article.href}:`, err);
+        }
+    }
+
+    // Step 5: Send the collected articles data to Make.com webhook (Replace with your actual webhook URL)
     await axios.post('https://hook.eu2.make.com/1m8yqc7djp5n424luitgca3m6sch4c0p', {
-        articleDescription: articleDescription
+        articles: articlesData
     });
 
     // Close the browser
