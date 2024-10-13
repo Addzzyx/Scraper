@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "playwright": "^1.48.0",
-    "axios": "^1.7.7"
+    "axios": "^1.7.7",
+    "jsdom": "^24.0.0",
+    "@mozilla/readability": "^0.5.0"
   }
 }
