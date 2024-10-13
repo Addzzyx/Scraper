@@ -24,9 +24,18 @@ async function fetchTrendingNewsUrls() {
   }
 }
 
-async function getRedirectUrl(page, url) {
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
-  return page.url();
+async function getExternalLink(page, url) {
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  
+  const externalUrl = await page.evaluate(() => {
+    const link = document.querySelector('a[target="_blank"]');
+    return link ? link.href : null;
+  });
+
+  console.log(`CryptoPanic URL: ${url}`);
+  console.log(`External URL: ${externalUrl}`);
+
+  return externalUrl;
 }
 
 async function scrapeArticleContent(page, url) {
@@ -38,7 +47,8 @@ async function scrapeArticleContent(page, url) {
       'article',
       '.article-body',
       '.post-content',
-      'main'
+      'main',
+      '.entry-content'
     ];
     
     for (const selector of selectors) {
@@ -51,7 +61,7 @@ async function scrapeArticleContent(page, url) {
     return 'Failed to find article content';
   });
 
-  return content;
+  return content.slice(0, 1000) + (content.length > 1000 ? '...' : '');
 }
 
 async function scrapeAndSendNews() {
@@ -60,18 +70,16 @@ async function scrapeAndSendNews() {
   const articles = await fetchTrendingNewsUrls();
 
   for (const article of articles) {
-    const redirectUrl = await getRedirectUrl(page, article.url);
-    console.log(`Original URL: ${article.url}`);
-    console.log(`Redirected URL: ${redirectUrl}`);
+    const externalUrl = await getExternalLink(page, article.url);
+    const content = await scrapeArticleContent(page, externalUrl || article.url);
     
-    const content = await scrapeArticleContent(page, redirectUrl);
     const scrapedArticle = {
       title: article.title,
       original_url: article.url,
-      source_url: redirectUrl,
+      source_url: externalUrl || article.url,
       source_name: article.source.title,
       published_at: article.published_at,
-      content: content.slice(0, 1000) // Truncate to 1000 characters
+      content: content
     };
 
     try {
