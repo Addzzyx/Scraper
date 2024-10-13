@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { chromium } = require('playwright');
 
-const CRYPTOPANIC_API_KEY = 'YOUR_API_KEY_HERE'; // Replace with your actual API key
+const CRYPTOPANIC_API_KEY = process.env.CRYPTOPANIC_API_KEY;
 const CRYPTOPANIC_API_URL = 'https://cryptopanic.com/api/v1/posts/';
 const MAKE_WEBHOOK_URL = 'https://hook.eu2.make.com/1m8yqc7djp5n424luitgca3m6sch4c0p';
 
