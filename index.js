@@ -5,11 +5,11 @@ const axios = require('axios');
     const browser = await chromium.launch();
     const page = await browser.newPage();
 
-    // Navigate to the page you want to scrape (e.g., trending articles on CryptoPanic)
-    await page.goto('https://cryptopanic.com/');
+    // Navigate to the page and wait for it to fully load
+    await page.goto('https://cryptopanic.com/', { waitUntil: 'networkidle0' });
 
-    // Wait for the news item titles
-    await page.waitForSelector('.news-item .title a');
+    // Wait for the news item titles with increased timeout
+    await page.waitForSelector('.news-item .title a', { timeout: 60000 });
 
     // Scrape the top 3 article titles and links
     const articleLinks = await page.evaluate(() => {
@@ -22,7 +22,7 @@ const axios = require('axios');
     // Now, for each article, scrape its metadata
     const articlesWithMeta = [];
     for (const article of articleLinks) {
-        await page.goto(article.href);
+        await page.goto(article.href, { waitUntil: 'networkidle0' });
 
         const metadata = await page.evaluate(() => {
             const getMetaTag = (name) => document.querySelector(`meta[name="${name}"]`)?.content || document.querySelector(`meta[property="${name}"]`)?.content || '';
