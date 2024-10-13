@@ -17,11 +17,7 @@ async function fetchTrendingNewsUrls() {
 
   try {
     const response = await axios.get(CRYPTOPANIC_API_URL, { params });
-    return response.data.results.slice(0, 10).map(article => ({
-      title: article.title,
-      url: article.url,
-      source: article.source.title
-    }));
+    return response.data.results.slice(0, 10);
   } catch (error) {
     console.error('Error fetching CryptoPanic news:', error.message);
     return [];
@@ -30,11 +26,21 @@ async function fetchTrendingNewsUrls() {
 
 async function scrapeContent(page, url) {
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    return await page.evaluate(() => {
-      const article = document.querySelector('article') || document.querySelector('.article-body') || document.body;
-      return article.innerText.trim();
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+
+    // Try multiple potential article selectors
+    const content = await page.evaluate(() => {
+      const selectors = ['article', '.article-body', '.post-content', 'main', '.entry-content'];
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element) {
+          return element.innerText.trim();
+        }
+      }
+      return 'Failed to find article content';
     });
+
+    return content.slice(0, 1000) + (content.length > 1000 ? '...' : ''); // Truncate to 1000 characters
   } catch (error) {
     console.error(`Error scraping ${url}:`, error.message);
     return 'Failed to scrape content';
@@ -49,8 +55,12 @@ async function scrapeAndSendNews() {
   for (const article of articles) {
     const content = await scrapeContent(page, article.url);
     const scrapedArticle = {
-      ...article,
-      content: content.slice(0, 500) + '...' // Truncate content for brevity
+      title: article.title,
+      url: article.url,
+      source_url: article.source.url,
+      source_name: article.source.title,
+      published_at: article.published_at,
+      content: content
     };
 
     try {
