@@ -17,7 +17,6 @@ async function fetchTrendingNewsUrls() {
 
   try {
     const response = await axios.get(CRYPTOPANIC_API_URL, { params });
-    console.log(`Fetched ${response.data.results.length} articles from CryptoPanic API`);
     return response.data.results.slice(0, 10);
   } catch (error) {
     console.error('Error fetching CryptoPanic news:', error.message);
@@ -25,33 +24,34 @@ async function fetchTrendingNewsUrls() {
   }
 }
 
-async function scrapeContent(page, url) {
-  try {
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+async function getRedirectUrl(page, url) {
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+  return page.url();
+}
 
-    // Wait for potential content load
-    await page.waitForSelector('article, .article-body, .post-content, .entry-content', { timeout: 10000 }).catch(() => {});
-
-    // Handle potential cookie banners or popups
-    const consentButton = await page.$('.accept-cookies, .consent-button');
-    if (consentButton) await consentButton.click();
-
-    const content = await page.evaluate(() => {
-      const selectors = ['article', '.article-body', '.post-content', '.entry-content', 'main'];
-      for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          return element.innerText.trim();
-        }
+async function scrapeArticleContent(page, url) {
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+  
+  const content = await page.evaluate(() => {
+    const selectors = [
+      '.article__content',
+      'article',
+      '.article-body',
+      '.post-content',
+      'main'
+    ];
+    
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      if (element) {
+        return element.innerText.trim();
       }
-      return document.body.innerText.trim();
-    });
+    }
+    
+    return 'Failed to find article content';
+  });
 
-    return content.slice(0, 1000) + (content.length > 1000 ? '...' : '');
-  } catch (error) {
-    console.error(`Error scraping ${url}:`, error.message);
-    return 'Failed to scrape content';
-  }
+  return content;
 }
 
 async function scrapeAndSendNews() {
@@ -59,30 +59,30 @@ async function scrapeAndSendNews() {
   const page = await browser.newPage();
   const articles = await fetchTrendingNewsUrls();
 
-  const scrapedArticles = [];
-
   for (const article of articles) {
-    const content = await scrapeContent(page, article.url);
-    scrapedArticles.push({
+    const redirectUrl = await getRedirectUrl(page, article.url);
+    console.log(`Original URL: ${article.url}`);
+    console.log(`Redirected URL: ${redirectUrl}`);
+    
+    const content = await scrapeArticleContent(page, redirectUrl);
+    const scrapedArticle = {
       title: article.title,
-      url: article.url,
-      source_url: article.source.url,
+      original_url: article.url,
+      source_url: redirectUrl,
       source_name: article.source.title,
       published_at: article.published_at,
-      content: content
-    });
-    console.log(`Scraped article: ${article.title}`);
+      content: content.slice(0, 1000) // Truncate to 1000 characters
+    };
+
+    try {
+      await axios.post(MAKE_WEBHOOK_URL, scrapedArticle);
+      console.log(`Sent to webhook: ${article.title}`);
+    } catch (error) {
+      console.error(`Failed to send to webhook: ${article.title}`, error.message);
+    }
   }
 
   await browser.close();
-
-  try {
-    await axios.post(MAKE_WEBHOOK_URL, { articles: scrapedArticles });
-    console.log(`Sent ${scrapedArticles.length} articles to webhook`);
-  } catch (error) {
-    console.error('Failed to send articles to webhook:', error.message);
-  }
 }
 
-// Run the main function
 scrapeAndSendNews().then(() => console.log('Scraping completed')).catch(console.error);
