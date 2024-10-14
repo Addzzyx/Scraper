@@ -32,8 +32,10 @@ async function fetchTrendingNewsUrls() {
 async function getExternalLink(page, cryptoPanicUrl) {
   try {
     await page.goto(cryptoPanicUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    // Wait for the external link element to be loaded
+    await page.waitForSelector('a.font-bold[href^="/news/click/"]', { timeout: 5000 });
     const externalPartialUrl = await page.evaluate(() => {
-      const link = document.querySelector('a[href^="/news/click/"]');
+      const link = document.querySelector('a.font-bold[href^="/news/click/"]');
       return link ? link.getAttribute('href') : null;
     });
     if (externalPartialUrl) {
@@ -95,34 +97,35 @@ async function scrapeAndSendNews() {
 
   for (const article of articles) {
     console.log(`Processing article: ${article.title}`);
-
-    // Get the external URL from the CryptoPanic page
-    const externalUrl = await getExternalLink(page, article.crypto_panic_url);
-
-    if (!externalUrl) {
-      console.error(`Failed to get external URL for article: ${article.title}`);
-      continue; // Skip to the next article
-    }
-
-    const content = await retryOperation(() => scrapeArticleContent(page, externalUrl));
-
-    const scrapedArticle = {
-      title: article.title,
-      original_url: article.crypto_panic_url,
-      source_url: externalUrl,
-      source_name: article.source_name,
-      published_at: article.published_at,
-      content: content
-    };
-
     try {
+      // Get the external URL from the CryptoPanic page
+      const externalUrl = await retryOperation(() => getExternalLink(page, article.crypto_panic_url));
+
+      if (!externalUrl) {
+        console.error(`Failed to get external URL for article: ${article.title}`);
+        continue; // Skip to the next article
+      }
+      console.log(`External URL: ${externalUrl}`);
+
+      const content = await retryOperation(() => scrapeArticleContent(page, externalUrl));
+
+      const scrapedArticle = {
+        title: article.title,
+        original_url: article.crypto_panic_url,
+        source_url: externalUrl,
+        source_name: article.source_name,
+        published_at: article.published_at,
+        content: content
+      };
+
+      // Send the scraped article to the Make.com webhook
       await axios.post(MAKE_WEBHOOK_URL, scrapedArticle);
       console.log(`Sent to webhook: ${article.title}`);
     } catch (error) {
-      console.error(`Failed to send to webhook: ${article.title}`, error.message);
+      console.error(`Error processing article "${article.title}":`, error.message);
     }
 
-    // Add a delay between requests
+    // Add a delay between processing articles
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
 
