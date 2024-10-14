@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const axios = require('axios');
 
-const CRYPTOPANIC_API_URL = 'https://cryptopanic.com/api/v1/posts/';
+const CRYPTOPANIC_API_URL = 'https://cryptopanic.com/api/posts/';
 const CRYPTOPANIC_API_KEY = process.env.CRYPTOPANIC_API_KEY;
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL;
 
@@ -19,14 +19,36 @@ async function fetchTrendingNewsUrls() {
     console.log(`Fetched ${response.data.results.length} articles from CryptoPanic API`);
     return response.data.results.slice(0, 10).map(article => ({
       title: article.title,
-      external_url: article.url,
-      crypto_panic_url: article.short_url,
+      crypto_panic_url: article.url, // This is the CryptoPanic URL
       source_name: article.source.title,
       published_at: article.published_at
     }));
   } catch (error) {
     console.error('Error fetching CryptoPanic news:', error.message);
     return [];
+  }
+}
+
+async function getExternalLink(page, cryptoPanicUrl) {
+  try {
+    await page.goto(cryptoPanicUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const externalPartialUrl = await page.evaluate(() => {
+      const link = document.querySelector('a[href^="/news/click/"]');
+      return link ? link.getAttribute('href') : null;
+    });
+    if (externalPartialUrl) {
+      const externalRedirectUrl = new URL(externalPartialUrl, 'https://cryptopanic.com').href;
+      // Navigate to the redirect URL to get the final external URL
+      await page.goto(externalRedirectUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      const finalExternalUrl = page.url();
+      return finalExternalUrl;
+    } else {
+      console.error(`External link not found on CryptoPanic page: ${cryptoPanicUrl}`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`Error getting external link from ${cryptoPanicUrl}:`, error.message);
+    return null;
   }
 }
 
@@ -66,19 +88,28 @@ async function retryOperation(operation, maxRetries = 3) {
 async function scrapeAndSendNews() {
   const browser = await chromium.launch();
   const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
   });
   const page = await context.newPage();
   const articles = await fetchTrendingNewsUrls();
 
   for (const article of articles) {
     console.log(`Processing article: ${article.title}`);
-    const content = await retryOperation(() => scrapeArticleContent(page, article.external_url));
-    
+
+    // Get the external URL from the CryptoPanic page
+    const externalUrl = await getExternalLink(page, article.crypto_panic_url);
+
+    if (!externalUrl) {
+      console.error(`Failed to get external URL for article: ${article.title}`);
+      continue; // Skip to the next article
+    }
+
+    const content = await retryOperation(() => scrapeArticleContent(page, externalUrl));
+
     const scrapedArticle = {
       title: article.title,
       original_url: article.crypto_panic_url,
-      source_url: article.external_url,
+      source_url: externalUrl,
       source_name: article.source_name,
       published_at: article.published_at,
       content: content
