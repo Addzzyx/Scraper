@@ -32,22 +32,27 @@ async function fetchTrendingNewsUrls() {
 async function getExternalLink(page, cryptoPanicUrl) {
   try {
     await page.goto(cryptoPanicUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    // Wait for the external link element to be loaded
-    await page.waitForSelector('a.font-bold[href^="/news/click/"]', { timeout: 5000 });
-    const externalPartialUrl = await page.evaluate(() => {
-      const link = document.querySelector('a.font-bold[href^="/news/click/"]');
-      return link ? link.getAttribute('href') : null;
-    });
-    if (externalPartialUrl) {
-      const externalRedirectUrl = new URL(externalPartialUrl, 'https://cryptopanic.com').href;
-      // Navigate to the redirect URL to get the final external URL
-      await page.goto(externalRedirectUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      const finalExternalUrl = page.url();
-      return finalExternalUrl;
-    } else {
-      console.error(`External link not found on CryptoPanic page: ${cryptoPanicUrl}`);
-      return null;
-    }
+
+    // Wait for the link element to be available
+    await page.waitForSelector('a[href^="/news/click/"]', { timeout: 10000 });
+
+    // Handle the new tab that opens when the link is clicked
+    const [newPage] = await Promise.all([
+      page.waitForEvent('popup'),
+      page.click('a[href^="/news/click/"]'),
+    ]);
+
+    // Wait for the new page to load and the redirection to complete
+    await newPage.waitForLoadState('networkidle', { timeout: 60000 });
+
+    // Wait for a few seconds to ensure redirection
+    await newPage.waitForTimeout(5000);
+
+    const finalExternalUrl = newPage.url();
+    await newPage.close();
+
+    console.log(`Found external URL: ${finalExternalUrl}`);
+    return finalExternalUrl;
   } catch (error) {
     console.error(`Error getting external link from ${cryptoPanicUrl}:`, error.message);
     return null;
