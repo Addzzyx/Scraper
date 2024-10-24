@@ -5,7 +5,7 @@ const CRYPTOPANIC_API_URL = 'https://cryptopanic.com/api/posts/';
 const CRYPTOPANIC_API_KEY = process.env.CRYPTOPANIC_API_KEY;
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL;
 
-// Verify environment variables at startup
+// Verify API key at startup
 if (!CRYPTOPANIC_API_KEY) {
     console.error('Error: CRYPTOPANIC_API_KEY environment variable is not set');
     process.exit(1);
@@ -26,7 +26,7 @@ async function fetchTrendingNews() {
             }
         });
 
-        if (!response.data || !response.data.results) {
+        if (!response.data?.results) {
             console.error('Invalid API response:', response.data);
             return [];
         }
@@ -48,8 +48,8 @@ async function scrapeArticleContent(page, url) {
     console.log(`\nScraping: ${url}`);
     try {
         await page.goto(url, { 
-            waitUntil: 'networkidle',
-            timeout: 45000 
+            waitUntil: 'domcontentloaded',
+            timeout: 30000 
         });
 
         const finalUrl = page.url();
@@ -59,78 +59,92 @@ async function scrapeArticleContent(page, url) {
         let contentFound = false;
         for (let i = 0; i < 3; i++) {
             await page.waitForTimeout(2000);
-            const hasContent = await page.evaluate(() => {
-                return !!document.querySelector('article, .article-content, .post-content, main');
-            });
-            if (hasContent) {
-                contentFound = true;
-                break;
+            try {
+                contentFound = await page.evaluate(() => {
+                    const selectors = [
+                        'article',
+                        '.article-content',
+                        '.post-content',
+                        'main',
+                        '.content',
+                        '#article-body'
+                    ];
+                    return selectors.some(selector => 
+                        document.querySelector(selector) !== null
+                    );
+                });
+                if (contentFound) break;
+            } catch (e) {
+                console.log(`Attempt ${i + 1} failed:`, e.message);
             }
             console.log(`Content check attempt ${i + 1}...`);
         }
 
-        // Check for CAPTCHA/error pages first
-        const pageText = await page.evaluate(() => document.body.innerText.toLowerCase());
-        if (pageText.includes('verify you are human') || 
-            pageText.includes('security check') ||
-            pageText.includes('captcha') ||
-            pageText.includes('access denied')) {
+        // Check for security measures
+        const pageText = await page.evaluate(() => 
+            document.body.innerText.toLowerCase()
+        );
+
+        const blockPhrases = [
+            'verify you are human',
+            'security check',
+            'captcha',
+            'access denied',
+            'cloudflare',
+            'ddos protection'
+        ];
+
+        if (blockPhrases.some(phrase => pageText.includes(phrase))) {
             console.log('Security check detected, skipping');
             return null;
         }
 
-        // Extract content with better cleaning
+        // Extract content
         const result = await page.evaluate(() => {
-            // First remove all unwanted elements
-            [
-                'script', 'style', 'link', 'meta', 'noscript',
-                'nav', 'header', 'footer', 'aside', 'iframe',
-                '.ad', '.ads', '[class*="ad-"]', '[id*="ad-"]',
-                '.social', '.share', '.newsletter', '.subscription',
-                '.related', '.sidebar', '.menu', '.nav',
-                '[class*="menu"]', '[class*="navigation"]',
-                '.author', '.bio', '.profile', '.about',
-                '.comments', '.toolbar', '.tools'
-            ].forEach(selector => {
+            // Remove unwanted elements
+            const unwanted = [
+                'script', 'style', 'nav', 'header', 'footer',
+                '.ad', '.ads', '.social-share', '.newsletter',
+                '.sidebar', '.menu', '.navigation', '.author-bio',
+                '.related-posts', '.comments', '[class*="advertisement"]',
+                '[class*="social"]', '[class*="share"]', '[class*="menu"]',
+                'iframe', '.toolbar', '.tools'
+            ];
+            
+            unwanted.forEach(selector => {
                 document.querySelectorAll(selector).forEach(el => el.remove());
             });
 
-            // Helper function to clean text
-            const cleanText = text => {
-                return text
-                    .replace(/\s+/g, ' ')
-                    .replace(/\n{2,}/g, '\n')
-                    .replace(/^(Advertisement|AD|Sponsored|Share|Home|News)(\s|$)/gim, '')
-                    .replace(/(Click here|Read more|Subscribe|Follow).*$/gim, '')
-                    .trim();
-            };
-
-            // Try common article selectors
+            // Try to find main content
             const selectors = [
-                'article .content',
-                '.article-body',
+                'article',
+                '.article-content',
                 '.post-content',
                 '.entry-content',
-                'article',
                 'main article',
-                '[role="article"]',
-                '.story-content'
+                '#article-body',
+                '.story-content',
+                '.content',
+                '[role="article"]'
             ];
 
             for (const selector of selectors) {
                 const element = document.querySelector(selector);
                 if (element) {
-                    const text = cleanText(element.innerText);
+                    let text = element.innerText || '';
                     if (text.length > 500) {
-                        return text;
+                        return text
+                            .replace(/\s+/g, ' ')
+                            .replace(/\n{2,}/g, '\n')
+                            .trim();
                     }
                 }
             }
 
-            // Fallback: find largest meaningful text block
-            return Array.from(document.getElementsByTagName('*'))
+            // Fallback: find largest text block
+            const blocks = Array.from(document.getElementsByTagName('*'))
                 .map(el => ({
-                    text: cleanText(el.innerText),
+                    text: (el.innerText || '').trim(),
                     area: el.offsetWidth * el.offsetHeight,
                     depth: (function(e) {
                         let d = 0;
@@ -142,29 +156,33 @@ async function scrapeArticleContent(page, url) {
                     })(el)
                 }))
                 .filter(({text}) => text.length > 500)
-                .sort((a, b) => (b.area - a.area) || (a.depth - b.depth))
-                [0]?.text || null;
+                .sort((a, b) => (b.area - a.area) || (a.depth - b.depth));
+
+            return blocks[0]?.text || null;
         });
 
-        if (!result || result.length < 500) {
+        if (!result) {
             console.log('No substantial content found');
             return null;
         }
 
-        // Final content cleaning
+        // Clean the content
         const cleanContent = result
-            .replace(/^(Advertisement|AD|Home|News|Share)(\s|$)/gim, '')
-            .replace(/(Click here|Read more|Subscribe|Follow).*$/gim, '')
-            .replace(/\s+/g, ' ')
-            .replace(/\n{3,}/g, '\n\n')
-            .replace(/Related Articles:.*$/is, '')
-            .replace(/Share this article:.*$/is, '')
-            .replace(/Originally published at.*$/im, '')
-            .replace(/Newsletter.*$/im, '')
-            .replace(/Subscribe to.*$/im, '')
-            .replace(/\[\s*Read\s+More\s*\]/gi, '')
-            .replace(/^\s*(RSS|HOME|NEWS|BACK|Share)\s*$/gim, '')
+            .replace(/^(Go back to All News|RSS|Share this article|Home|News)(\s|$)/gm, '')
+            .replace(/Related Articles:.*$/s, '')
+            .replace(/Share this article:.*$/s, '')
+            .replace(/Originally published at.*$/m, '')
+            .replace(/Newsletter.*$/m, '')
+            .replace(/Follow us on.*$/m, '')
+            .replace(/Read more:.*$/m, '')
+            .replace(/(Tags:|Categories:).*$/m, '')
+            .replace(/^Advertisement/gm, '')
             .trim();
+
+        if (cleanContent.length < 500) {
+            console.log('Content too short after cleaning');
+            return null;
+        }
 
         console.log(`Extracted ${cleanContent.length} characters`);
         return {
@@ -220,7 +238,6 @@ async function processArticles(articles) {
                 console.log('Successfully processed article');
             }
 
-            // Rate limiting between requests
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
     } finally {
@@ -252,9 +269,9 @@ async function main() {
             console.log('Preview:', article.content.substring(0, 150) + '...');
         });
 
-        // Send to Make.com if webhook URL is configured
+        // Send to Make.com if configured
         if (MAKE_WEBHOOK_URL && results.length > 0) {
-            console.log('\nSending results to Make.com...');
+            console.log('\nSending to Make.com...');
             try {
                 await axios.post(MAKE_WEBHOOK_URL, {
                     articles: results,
@@ -275,7 +292,6 @@ async function main() {
     }
 }
 
-// Add global error handlers
 process.on('uncaughtException', (error) => {
     console.error('Uncaught Exception:', error);
     process.exit(1);
@@ -286,7 +302,6 @@ process.on('unhandledRejection', (error) => {
     process.exit(1);
 });
 
-// Start the script
 console.log('Script starting...');
 main().catch(error => {
     console.error('Main function error:', error);
