@@ -24,7 +24,11 @@ jobs:
       run: npx playwright install chromium
 
     - name: Run scraping script
-      env:
-        CRYPTOPANIC_API_KEY: ${{ secrets.CRYPTOPANIC_API_KEY }}
-        MAKE_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }}
       run: node index.js
+
+    - name: Upload debug screenshot
+      if: always()
+      uses: actions/upload-artifact@v2
+      with:
+        name: debug-screenshot
+        path: debug-screenshot.png
