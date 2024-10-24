@@ -3,7 +3,6 @@ const axios = require('axios');
 
 const CRYPTOPANIC_API_URL = 'https://cryptopanic.com/api/posts/';
 const CRYPTOPANIC_API_KEY = process.env.CRYPTOPANIC_API_KEY;
-const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL;
 
 async function fetchTrendingNews() {
   const params = {
@@ -16,7 +15,7 @@ async function fetchTrendingNews() {
   };
   try {
     const response = await axios.get(CRYPTOPANIC_API_URL, { params });
-    const articles = response.data.results.slice(0, 10); // Get the first 10 articles
+    const articles = response.data.results.slice(0, 10);
     console.log(`Fetched ${articles.length} articles from CryptoPanic API`);
     return articles;
   } catch (error) {
@@ -26,101 +25,161 @@ async function fetchTrendingNews() {
 }
 
 function extractArticleId(cryptopanicUrl) {
-  // Example URL: https://cryptopanic.com/news/20086293/Cardano-Opens-13T-Bitcoin-Liquidity-with-BitcoinOS
   const regex = /\/news\/(\d+)\//;
   const match = cryptopanicUrl.match(regex);
-  if (match && match[1]) {
-    return match[1];
-  } else {
-    console.error(`Failed to extract article ID from URL: ${cryptopanicUrl}`);
-    return null;
-  }
+  return match?.[1] || null;
 }
 
 async function scrapeArticleContent(page, url) {
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    // Wait for any redirects to complete
-    await page.waitForLoadState('networkidle', { timeout: 60000 });
-
-    // Extract the content
-    const content = await page.evaluate(() => {
-      const selectors = ['article', '.article-body', '.post-content', 'main', '.entry-content'];
-      for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        if (element) return element.innerText.trim();
-      }
-      return document.body.innerText.trim();
+    // Navigate to URL with extended timeout
+    await page.goto(url, { 
+      timeout: 120000,
+      waitUntil: 'domcontentloaded'
     });
 
-    return content.slice(0, 1000) + (content.length > 1000 ? '...' : '');
+    // Check for challenge/protection pages
+    const isProtected = await page.evaluate(() => {
+      const bodyText = document.body.innerText.toLowerCase();
+      const protectedPhrases = [
+        'verify you are human',
+        'access denied',
+        'security check',
+        'cloudflare',
+        'ddos protection',
+        'please wait'
+      ];
+      return protectedPhrases.some(phrase => bodyText.includes(phrase));
+    });
+
+    if (isProtected) {
+      console.warn(`Protection detected at ${url}`);
+      return '[Protected: Unable to access content]';
+    }
+
+    // Wait for content with multiple selector options
+    try {
+      await page.waitForSelector([
+        'article',
+        '[role="article"]',
+        '.article-content',
+        '.post-content',
+        '.entry-content',
+        'main',
+        '#content',
+        '.content'
+      ].join(','), { timeout: 30000 });
+    } catch (error) {
+      console.log('Content selector timeout, attempting extraction anyway...');
+    }
+
+    // Extract and clean content
+    const content = await page.evaluate(() => {
+      // Remove unwanted elements first
+      const unwanted = document.querySelectorAll([
+        'script',
+        'style',
+        'nav',
+        'header',
+        'footer',
+        '.ad',
+        '.ads',
+        '.advertisement',
+        '.social-share',
+        '.related-posts'
+      ].join(','));
+      unwanted.forEach(el => el.remove());
+
+      // Try to find main content
+      const selectors = [
+        'article',
+        '[role="article"]',
+        '.article-content',
+        '.post-content',
+        '.entry-content',
+        'main',
+        '#content',
+        '.content'
+      ];
+
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element) {
+          const text = element.innerText
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line)
+            .join('\n');
+          
+          if (text.length > 150) {  // Ensure meaningful content
+            return text;
+          }
+        }
+      }
+
+      // Fallback to body content if no suitable container found
+      return document.body.innerText;
+    });
+
+    // Clean and format the content
+    const cleanContent = content
+      .replace(/\s+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    return cleanContent.slice(0, 1500) + (cleanContent.length > 1500 ? '...' : '');
+
   } catch (error) {
-    console.error(`Error scraping content from ${url}:`, error.message);
-    return 'Failed to extract article content';
+    console.error(`Error scraping ${url}:`, error.message);
+    return `[Error: ${error.message}]`;
   }
 }
 
 async function processArticles(articles) {
-  const browser = await chromium.launch();
-  const context = await browser.newContext({
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)' +
-      ' Chrome/115.0.0.0 Safari/537.36'
+  const browser = await chromium.launch({
+    args: ['--no-sandbox']
   });
+  
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+               '(KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 }
+  });
+
   const page = await context.newPage();
 
-  for (const article of articles) {
-    console.log('-----------------------------------');
-    console.log(`Title: ${article.title}`);
-    console.log(`Published at: ${article.published_at}`);
-    console.log(`CryptoPanic URL: ${article.url}`);
+  try {
+    for (const article of articles) {
+      console.log('\n' + '='.repeat(50));
+      console.log(`Processing: ${article.title}`);
+      console.log(`Published: ${article.published_at}`);
+      console.log(`URL: ${article.url}`);
 
-    const articleId = extractArticleId(article.url);
-    if (!articleId) {
-      console.error(`Skipping article due to missing ID: ${article.title}`);
-      continue;
+      const articleId = extractArticleId(article.url);
+      if (!articleId) continue;
+
+      const externalLinkUrl = `https://cryptopanic.com/news/click/${articleId}/`;
+      console.log(`Following redirect link: ${externalLinkUrl}`);
+
+      const content = await scrapeArticleContent(page, externalLinkUrl);
+      console.log('\nExtracted Content:');
+      console.log('-'.repeat(50));
+      console.log(content);
+
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
-
-    const externalLinkUrl = `https://cryptopanic.com/news/click/${articleId}/`;
-
-    console.log(`External Link URL: ${externalLinkUrl}`);
-
-    // Scrape the content from the external article
-    const content = await scrapeArticleContent(page, externalLinkUrl);
-
-    // Log or process the content as needed
-    console.log(`Content excerpt: ${content}`);
-
-    // If you want to send this data to a webhook, uncomment the code below
-    /*
-    try {
-      await axios.post(process.env.MAKE_WEBHOOK_URL, {
-        title: article.title,
-        published_at: article.published_at,
-        cryptopanic_url: article.url,
-        content: content
-      });
-      console.log(`Sent article to webhook: ${article.title}`);
-    } catch (error) {
-      console.error(`Error sending article "${article.title}" to webhook:`, error.message);
-    }
-    */
-
-    // Pause between requests to be polite
-    await new Promise(resolve => setTimeout(resolve, 2000));
+  } finally {
+    await browser.close();
   }
-
-  await browser.close();
 }
 
 async function main() {
-  const articles = await fetchTrendingNews();
-  await processArticles(articles);
-}
-
-main()
-  .then(() => console.log('Processing completed'))
-  .catch(error => {
-    console.error('An error occurred:', error.message);
+  try {
+    const articles = await fetchTrendingNews();
+    await processArticles(articles);
+    console.log('\nProcessing completed successfully');
+  } catch (error) {
+    console.error('Fatal error:', error);
     process.exit(1);
-  });
+  }
+}
