@@ -1,78 +1,56 @@
-const { chromium } = require('playwright');
+const axios = require('axios');
 
-async function scrapeRisingNews() {
-  // Launch browser with headless mode
-  const browser = await chromium.launch({
-    headless: true
-  });
-  
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-  });
-  
-  const page = await context.newPage();
+const CRYPTOPANIC_API_KEY = process.env.CRYPTOPANIC_API_KEY;
+
+async function fetchRisingNews() {
+  console.log('Starting API fetch...');
   
   try {
-    console.log('Starting scrape...');
-    
-    // Navigate to the page and wait for network to be idle
-    await page.goto('https://cryptopanic.com/news/?filter=rising', {
-      waitUntil: 'networkidle'
+    // Configure the API request for rising news
+    const response = await axios.get('https://cryptopanic.com/api/v1/posts/', {
+      params: {
+        auth_token: CRYPTOPANIC_API_KEY,
+        filter: 'rising',  // Get rising posts
+        public: 'true',
+        kind: 'news',
+        regions: 'en',     // English news only
+        metadata: 'true'   // Include metadata
+      }
     });
 
-    // Wait for the Vue app to load and render content
-    await page.waitForLoadState('domcontentloaded');
+    const articles = response.data.results;
     
-    // Add a longer wait to ensure dynamic content loads
-    await page.waitForTimeout(5000);
-
-    console.log('Page loaded, extracting articles...');
-
-    // Extract articles using JavaScript in the page context
-    const articles = await page.evaluate(() => {
-      const posts = document.querySelectorAll('div[data-title]');
-      return Array.from(posts).map(post => ({
-        title: post.getAttribute('data-title'),
-        url: post.querySelector('a')?.href || '',
-        source: post.querySelector('.news-source')?.textContent?.trim() || 'Unknown'
-      })).filter(article => article.title && article.url);
-    });
-
     console.log('\nResults:');
     console.log('----------------------------------------');
-    console.log(`Found ${articles.length} articles\n`);
-    
-    if (articles.length === 0) {
-      console.log('No articles found. Taking debug screenshot...');
-      await page.screenshot({ path: 'debug-screenshot.png', fullPage: true });
-      
-      // Log the page HTML for debugging
-      const html = await page.content();
-      console.log('\nPage HTML preview:');
-      console.log(html.substring(0, 1000));
-    } else {
-      // Print found articles
-      articles.forEach((article, index) => {
-        console.log(`Article ${index + 1}:`);
-        console.log(`Title: ${article.title}`);
-        console.log(`URL: ${article.url}`);
-        console.log(`Source: ${article.source}`);
-        console.log('----------------------------------------\n');
-      });
-    }
+    console.log(`Found ${articles.length} rising articles\n`);
+
+    // Process and display each article
+    articles.forEach((article, index) => {
+      console.log(`Article ${index + 1}:`);
+      console.log(`Title: ${article.title}`);
+      console.log(`CryptoPanic URL: ${article.url}`);
+      console.log(`Published: ${new Date(article.published_at).toLocaleString()}`);
+      console.log('----------------------------------------\n');
+    });
+
+    return articles;
 
   } catch (error) {
-    console.error('Error scraping news:', error);
-    // Take screenshot on error
-    await page.screenshot({ path: 'error-screenshot.png', fullPage: true });
-  } finally {
-    await browser.close();
+    if (error.response) {
+      console.error('API Error:', {
+        status: error.response.status,
+        data: error.response.data
+      });
+    } else {
+      console.error('Error fetching news:', error.message);
+    }
+    throw error;
   }
 }
 
-scrapeRisingNews()
-  .then(() => console.log('Scraping completed'))
+fetchRisingNews()
+  .then(() => console.log('Fetch completed'))
   .catch(error => {
-    console.error('An error occurred during scraping:', error);
+    console.error('An error occurred:', error);
     process.exit(1);
   });
