@@ -20,16 +20,7 @@ jobs:
     - name: Install dependencies
       run: npm install
 
-    - name: Install Playwright browsers
-      run: npx playwright install chromium
-
     - name: Run scraping script
+      env:
+        CRYPTOPANIC_API_KEY: ${{ secrets.CRYPTOPANIC_API_KEY }}
       run: node index.js
-
-    - name: Upload debug screenshot
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: debug-screenshot
-        path: debug-screenshot.png
-        retention-days: 5
