@@ -6,15 +6,18 @@ async function fetchRisingNews() {
   console.log('Starting API fetch...');
   
   try {
-    // Configure the API request for rising news
+    // Use the correct endpoint and remove PRO-only parameters
     const response = await axios.get('https://cryptopanic.com/api/v1/posts/', {
       params: {
         auth_token: CRYPTOPANIC_API_KEY,
-        filter: 'rising',  // Get rising posts
-        public: 'true',
+        filter: 'rising',
+        currencies: 'all',
         kind: 'news',
-        regions: 'en',     // English news only
-        metadata: 'true'   // Include metadata
+        public: true,
+        regions: 'en'
+      },
+      headers: {
+        'Accept': 'application/json'
       }
     });
 
@@ -26,9 +29,12 @@ async function fetchRisingNews() {
 
     // Process and display each article
     articles.forEach((article, index) => {
+      // Use the CryptoPanic URL format
+      const cryptoPanicUrl = `https://cryptopanic.com/news/${article.id}/`;
+      
       console.log(`Article ${index + 1}:`);
       console.log(`Title: ${article.title}`);
-      console.log(`CryptoPanic URL: ${article.url}`);
+      console.log(`CryptoPanic URL: ${cryptoPanicUrl}`);
       console.log(`Published: ${new Date(article.published_at).toLocaleString()}`);
       console.log('----------------------------------------\n');
     });
@@ -37,20 +43,23 @@ async function fetchRisingNews() {
 
   } catch (error) {
     if (error.response) {
-      console.error('API Error:', {
-        status: error.response.status,
-        data: error.response.data
-      });
+      console.error('API Error Status:', error.response.status);
+      console.error('API Error Data:', error.response.data);
+    } else if (error.request) {
+      console.error('No response received:', error.message);
     } else {
-      console.error('Error fetching news:', error.message);
+      console.error('Error:', error.message);
     }
     throw error;
   }
 }
 
 fetchRisingNews()
-  .then(() => console.log('Fetch completed'))
+  .then(() => {
+    console.log('Fetch completed successfully');
+    process.exit(0);
+  })
   .catch(error => {
-    console.error('An error occurred:', error);
+    console.error('Failed to complete fetch');
     process.exit(1);
   });
