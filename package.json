@@ -1,13 +1,13 @@
 {
-  "name": "cryptopanic-scraper",
+  "name": "cryptopanic-fetcher",
   "version": "1.0.0",
-  "description": "CryptoPanic API news fetcher",
+  "description": "A script to fetch CryptoPanic trending news titles",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.7.1"
+    "axios": "^1.7.7"
   },
   "engines": {
     "node": ">=18.0.0"
