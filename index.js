@@ -5,7 +5,52 @@ const CRYPTOPANIC_API_URL = 'https://cryptopanic.com/api/posts/';
 const CRYPTOPANIC_API_KEY = process.env.CRYPTOPANIC_API_KEY;
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL;
 
-// Verify API key at startup
+// Minimum content length for an article
+const MIN_CONTENT_LENGTH = 500;
+
+// Patterns to clean from content
+const CLEANUP_PATTERNS = [
+    // HTML and styling
+    /<[^>]+>/g,                                    // HTML tags
+    /\{[^}]+\}/g,                                  // CSS rules
+    /style="[^"]*"/g,                             // Style attributes
+    /class="[^"]*"/g,                             // Class attributes
+    
+    // Navigation elements
+    /^(RSS|AD|Advertisement|Home|News)(\s|$)/gim,  // Starting words
+    /(Go back to|Back to) .*/gi,                   // Navigation text
+    /Related Articles:.*$/is,                      // Related content
+    /Share (this )?article:.*$/is,                 // Share buttons
+    /Follow us on.*$/im,                           // Social media
+    /Read more:.*$/im,                             // Read more links
+    /(Tags:|Categories:).*$/im,                    // Tags/categories
+    /Newsletter.*$/im,                             // Newsletter
+    /Subscribe.*$/im,                              // Subscription
+    /Originally published.*$/im,                   // Source attribution
+    /\[\s*Read\s+More\s*\]/gi,                    // Read more buttons
+    
+    // Metadata
+    /\d+ min read/gi,                             // Reading time
+    /By\s+[\w\s]+\s*\|\s*\d+/g,                  // Author and date
+    /Published\s+\d+/gi,                          // Publish date
+    /Last updated:.*$/im,                         // Update time
+    /ADVERTISEMENT/gi,                            // Advertisements
+    /Use the code.*$/im,                          // Promo codes
+];
+
+// Security check phrases
+const SECURITY_PHRASES = [
+    'verify you are human',
+    'security check',
+    'captcha',
+    'access denied',
+    'cloudflare',
+    'ddos protection',
+    'please complete the security check',
+    'please wait while we verify',
+    'checking if the site connection is secure'
+];
+
 if (!CRYPTOPANIC_API_KEY) {
     console.error('Error: CRYPTOPANIC_API_KEY environment variable is not set');
     process.exit(1);
@@ -44,6 +89,26 @@ async function fetchTrendingNews() {
     }
 }
 
+async function cleanText(text) {
+    if (!text) return '';
+    
+    let cleaned = text;
+    
+    // Apply all cleanup patterns
+    for (const pattern of CLEANUP_PATTERNS) {
+        cleaned = cleaned.replace(pattern, '');
+    }
+    
+    // Additional cleaning
+    cleaned = cleaned
+        .replace(/\s+/g, ' ')           // Multiple spaces to single
+        .replace(/\n{3,}/g, '\n\n')     // Multiple newlines to double
+        .replace(/^\s*(RSS|AD)\s*/gim, '') // Remove RSS/AD at start of lines
+        .trim();
+    
+    return cleaned;
+}
+
 async function scrapeArticleContent(page, url) {
     console.log(`\nScraping: ${url}`);
     try {
@@ -59,92 +124,72 @@ async function scrapeArticleContent(page, url) {
         let contentFound = false;
         for (let i = 0; i < 3; i++) {
             await page.waitForTimeout(2000);
-            try {
-                contentFound = await page.evaluate(() => {
-                    const selectors = [
-                        'article',
-                        '.article-content',
-                        '.post-content',
-                        'main',
-                        '.content',
-                        '#article-body'
-                    ];
-                    return selectors.some(selector => 
-                        document.querySelector(selector) !== null
-                    );
-                });
-                if (contentFound) break;
-            } catch (e) {
-                console.log(`Attempt ${i + 1} failed:`, e.message);
-            }
+            contentFound = await page.evaluate(() => {
+                const selectors = [
+                    'article',
+                    '[role="article"]',
+                    '.article-content',
+                    '.post-content',
+                    '.entry-content',
+                    'main article',
+                    '#article-body',
+                    '.story-content'
+                ];
+                return selectors.some(s => document.querySelector(s) !== null);
+            });
+            if (contentFound) break;
             console.log(`Content check attempt ${i + 1}...`);
         }
 
         // Check for security measures
-        const pageText = await page.evaluate(() => 
-            document.body.innerText.toLowerCase()
-        );
-
-        const blockPhrases = [
-            'verify you are human',
-            'security check',
-            'captcha',
-            'access denied',
-            'cloudflare',
-            'ddos protection'
-        ];
-
-        if (blockPhrases.some(phrase => pageText.includes(phrase))) {
+        const pageText = await page.evaluate(() => document.body.innerText.toLowerCase());
+        if (SECURITY_PHRASES.some(phrase => pageText.includes(phrase))) {
             console.log('Security check detected, skipping');
             return null;
         }
 
         // Extract content
         const result = await page.evaluate(() => {
-            // Remove unwanted elements
-            const unwanted = [
-                'script', 'style', 'nav', 'header', 'footer',
-                '.ad', '.ads', '.social-share', '.newsletter',
-                '.sidebar', '.menu', '.navigation', '.author-bio',
-                '.related-posts', '.comments', '[class*="advertisement"]',
-                '[class*="social"]', '[class*="share"]', '[class*="menu"]',
-                'iframe', '.toolbar', '.tools'
-            ];
-            
-            unwanted.forEach(selector => {
+            // Remove unwanted elements first
+            [
+                'script', 'style', 'link', 'meta', 'noscript',
+                'nav', 'header', 'footer', 'aside', 'iframe',
+                '.ad', '.ads', '[class*="ad-"]', '[id*="ad-"]',
+                '.social', '.share', '.newsletter', '.subscription',
+                '.related', '.sidebar', '.menu', '.nav',
+                '[class*="menu"]', '[class*="navigation"]',
+                '.author', '.bio', '.profile', '.about',
+                '.comments', '.toolbar', '.tools',
+                'button', '[role="button"]'
+            ].forEach(selector => {
                 document.querySelectorAll(selector).forEach(el => el.remove());
             });
 
-            // Try to find main content
+            // Find main content container
             const selectors = [
-                'article',
+                'article .content',
                 '.article-content',
                 '.post-content',
                 '.entry-content',
+                'article',
                 'main article',
-                '#article-body',
+                '[role="article"]',
                 '.story-content',
-                '.content',
-                '[role="article"]'
+                '.article-body',
+                '.post-body'
             ];
 
             for (const selector of selectors) {
                 const element = document.querySelector(selector);
                 if (element) {
-                    let text = element.innerText || '';
-                    if (text.length > 500) {
-                        return text
-                            .replace(/\s+/g, ' ')
-                            .replace(/\n{2,}/g, '\n')
-                            .trim();
-                    }
+                    return element.innerText;
                 }
             }
 
             // Fallback: find largest text block
-            const blocks = Array.from(document.getElementsByTagName('*'))
+            return Array.from(document.getElementsByTagName('*'))
                 .map(el => ({
-                    text: (el.innerText || '').trim(),
+                    text: el.innerText,
                     area: el.offsetWidth * el.offsetHeight,
                     depth: (function(e) {
                         let d = 0;
@@ -155,10 +200,9 @@ async function scrapeArticleContent(page, url) {
                         return d;
                     })(el)
                 }))
-                .filter(({text}) => text.length > 500)
-                .sort((a, b) => (b.area - a.area) || (a.depth - b.depth));
-
-            return blocks[0]?.text || null;
+                .filter(({text}) => text.length > MIN_CONTENT_LENGTH)
+                .sort((a, b) => (b.area - a.area) || (a.depth - b.depth))
+                [0]?.text || null;
         });
 
         if (!result) {
@@ -167,28 +211,25 @@ async function scrapeArticleContent(page, url) {
         }
 
         // Clean the content
-        const cleanContent = result
-            .replace(/^(Go back to All News|RSS|Share this article|Home|News)(\s|$)/gm, '')
-            .replace(/Related Articles:.*$/s, '')
-            .replace(/Share this article:.*$/s, '')
-            .replace(/Originally published at.*$/m, '')
-            .replace(/Newsletter.*$/m, '')
-            .replace(/Follow us on.*$/m, '')
-            .replace(/Read more:.*$/m, '')
-            .replace(/(Tags:|Categories:).*$/m, '')
-            .replace(/^Advertisement/gm, '')
-            .trim();
+        const cleanContent = await cleanText(result);
 
-        if (cleanContent.length < 500) {
+        if (cleanContent.length < MIN_CONTENT_LENGTH) {
             console.log('Content too short after cleaning');
             return null;
         }
 
-        console.log(`Extracted ${cleanContent.length} characters`);
+        // Calculate real word count (exclude numbers and special characters)
+        const wordCount = cleanContent
+            .replace(/[^a-zA-Z\s]/g, ' ')
+            .split(/\s+/)
+            .filter(word => word.length > 0)
+            .length;
+
+        console.log(`Extracted ${cleanContent.length} characters, ${wordCount} words`);
         return {
             content: cleanContent,
             source_url: finalUrl,
-            word_count: cleanContent.split(/\s+/).length
+            word_count: wordCount
         };
 
     } catch (error) {
@@ -226,7 +267,7 @@ async function processArticles(articles) {
             const externalLinkUrl = `https://cryptopanic.com/news/click/${articleId}/`;
             const content = await scrapeArticleContent(page, externalLinkUrl);
 
-            if (content) {
+            if (content && content.word_count > 50) { // Ensure minimum word count
                 results.push({
                     title: article.title,
                     published_at: article.published_at,
@@ -292,6 +333,7 @@ async function main() {
     }
 }
 
+// Global error handlers
 process.on('uncaughtException', (error) => {
     console.error('Uncaught Exception:', error);
     process.exit(1);
