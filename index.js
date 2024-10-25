@@ -5,37 +5,19 @@ const CRYPTOPANIC_API_URL = 'https://cryptopanic.com/api/posts/';
 const CRYPTOPANIC_API_KEY = process.env.CRYPTOPANIC_API_KEY;
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL;
 
-// Minimum content length for an article
 const MIN_CONTENT_LENGTH = 500;
+const MIN_WORD_COUNT = 50;
 
-// Patterns to clean from content
-const CLEANUP_PATTERNS = [
-    // HTML and styling
-    /<[^>]+>/g,                                    // HTML tags
-    /\{[^}]+\}/g,                                  // CSS rules
-    /style="[^"]*"/g,                             // Style attributes
-    /class="[^"]*"/g,                             // Class attributes
-    
-    // Navigation elements
-    /^(RSS|AD|Advertisement|Home|News)(\s|$)/gim,  // Starting words
-    /(Go back to|Back to) .*/gi,                   // Navigation text
-    /Related Articles:.*$/is,                      // Related content
-    /Share (this )?article:.*$/is,                 // Share buttons
-    /Follow us on.*$/im,                           // Social media
-    /Read more:.*$/im,                             // Read more links
-    /(Tags:|Categories:).*$/im,                    // Tags/categories
-    /Newsletter.*$/im,                             // Newsletter
-    /Subscribe.*$/im,                              // Subscription
-    /Originally published.*$/im,                   // Source attribution
-    /\[\s*Read\s+More\s*\]/gi,                    // Read more buttons
-    
-    // Metadata
-    /\d+ min read/gi,                             // Reading time
-    /By\s+[\w\s]+\s*\|\s*\d+/g,                  // Author and date
-    /Published\s+\d+/gi,                          // Publish date
-    /Last updated:.*$/im,                         // Update time
-    /ADVERTISEMENT/gi,                            // Advertisements
-    /Use the code.*$/im,                          // Promo codes
+// Unwanted content selectors
+const UNWANTED_ELEMENTS = [
+    'script', 'style', 'link', 'meta', 'noscript',
+    'nav', 'header', 'footer', 'aside', 'iframe',
+    '.ad', '.ads', '[class*="ad-"]', '[id*="ad-"]',
+    '.social', '.share', '.newsletter', '.subscription',
+    '.related', '.sidebar', '.menu', '.nav',
+    '[class*="menu"]', '[class*="navigation"]',
+    '.author', '.bio', '.profile', '.about',
+    '.comments', '.toolbar', '.tools'
 ];
 
 // Security check phrases
@@ -46,11 +28,10 @@ const SECURITY_PHRASES = [
     'access denied',
     'cloudflare',
     'ddos protection',
-    'please complete the security check',
-    'please wait while we verify',
-    'checking if the site connection is secure'
+    'please complete the security check'
 ];
 
+// Startup check
 if (!CRYPTOPANIC_API_KEY) {
     console.error('Error: CRYPTOPANIC_API_KEY environment variable is not set');
     process.exit(1);
@@ -89,24 +70,29 @@ async function fetchTrendingNews() {
     }
 }
 
-async function cleanText(text) {
+function cleanText(text) {
     if (!text) return '';
-    
-    let cleaned = text;
-    
-    // Apply all cleanup patterns
-    for (const pattern of CLEANUP_PATTERNS) {
-        cleaned = cleaned.replace(pattern, '');
-    }
-    
-    // Additional cleaning
-    cleaned = cleaned
-        .replace(/\s+/g, ' ')           // Multiple spaces to single
-        .replace(/\n{3,}/g, '\n\n')     // Multiple newlines to double
-        .replace(/^\s*(RSS|AD)\s*/gim, '') // Remove RSS/AD at start of lines
+
+    return text
+        // Remove HTML tags
+        .replace(/<[^>]+>/g, '')
+        // Remove special formatting
+        .replace(/\{[^}]+\}/g, '')
+        // Clean whitespace
+        .replace(/\s+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        // Remove common junk text
+        .replace(/^(AD|Advertisement|RSS|Share|Home|News)(\s|$)/gim, '')
+        .replace(/(Go back to|Back to) .*/gi, '')
+        .replace(/Related Articles:.*$/is, '')
+        .replace(/Share (this )?article:.*$/is, '')
+        .replace(/Follow us on.*$/im, '')
+        .replace(/Read more:.*$/im, '')
+        .replace(/(Tags:|Categories:).*$/im, '')
+        .replace(/Newsletter.*$/im, '')
+        .replace(/Subscribe.*$/im, '')
+        .replace(/Originally published.*$/im, '')
         .trim();
-    
-    return cleaned;
 }
 
 async function scrapeArticleContent(page, url) {
@@ -124,20 +110,14 @@ async function scrapeArticleContent(page, url) {
         let contentFound = false;
         for (let i = 0; i < 3; i++) {
             await page.waitForTimeout(2000);
-            contentFound = await page.evaluate(() => {
-                const selectors = [
-                    'article',
-                    '[role="article"]',
-                    '.article-content',
-                    '.post-content',
-                    '.entry-content',
-                    'main article',
-                    '#article-body',
-                    '.story-content'
-                ];
-                return selectors.some(s => document.querySelector(s) !== null);
-            });
-            if (contentFound) break;
+            try {
+                contentFound = await page.evaluate(() => {
+                    return document.querySelector('article, .article-content, .post-content, main') !== null;
+                });
+                if (contentFound) break;
+            } catch (e) {
+                console.log(`Attempt ${i + 1}: Content check failed`);
+            }
             console.log(`Content check attempt ${i + 1}...`);
         }
 
@@ -149,23 +129,13 @@ async function scrapeArticleContent(page, url) {
         }
 
         // Extract content
-        const result = await page.evaluate(() => {
-            // Remove unwanted elements first
-            [
-                'script', 'style', 'link', 'meta', 'noscript',
-                'nav', 'header', 'footer', 'aside', 'iframe',
-                '.ad', '.ads', '[class*="ad-"]', '[id*="ad-"]',
-                '.social', '.share', '.newsletter', '.subscription',
-                '.related', '.sidebar', '.menu', '.nav',
-                '[class*="menu"]', '[class*="navigation"]',
-                '.author', '.bio', '.profile', '.about',
-                '.comments', '.toolbar', '.tools',
-                'button', '[role="button"]'
-            ].forEach(selector => {
+        const result = await page.evaluate(({unwantedElements, minLength}) => {
+            // Remove unwanted elements
+            unwantedElements.forEach(selector => {
                 document.querySelectorAll(selector).forEach(el => el.remove());
             });
 
-            // Find main content container
+            // Try main content selectors
             const selectors = [
                 'article .content',
                 '.article-content',
@@ -174,9 +144,7 @@ async function scrapeArticleContent(page, url) {
                 'article',
                 'main article',
                 '[role="article"]',
-                '.story-content',
-                '.article-body',
-                '.post-body'
+                '.story-content'
             ];
 
             for (const selector of selectors) {
@@ -190,40 +158,36 @@ async function scrapeArticleContent(page, url) {
             return Array.from(document.getElementsByTagName('*'))
                 .map(el => ({
                     text: el.innerText,
-                    area: el.offsetWidth * el.offsetHeight,
-                    depth: (function(e) {
-                        let d = 0;
-                        while (e.parentElement) {
-                            e = e.parentElement;
-                            d++;
-                        }
-                        return d;
-                    })(el)
+                    area: el.offsetWidth * el.offsetHeight
                 }))
-                .filter(({text}) => text.length > MIN_CONTENT_LENGTH)
-                .sort((a, b) => (b.area - a.area) || (a.depth - b.depth))
+                .filter(({text}) => text.length > minLength)
+                .sort((a, b) => b.area - a.area)
                 [0]?.text || null;
-        });
+
+        }, {unwantedElements: UNWANTED_ELEMENTS, minLength: MIN_CONTENT_LENGTH});
 
         if (!result) {
             console.log('No substantial content found');
             return null;
         }
 
-        // Clean the content
-        const cleanContent = await cleanText(result);
-
+        const cleanContent = cleanText(result);
         if (cleanContent.length < MIN_CONTENT_LENGTH) {
             console.log('Content too short after cleaning');
             return null;
         }
 
-        // Calculate real word count (exclude numbers and special characters)
+        // Calculate real word count
         const wordCount = cleanContent
             .replace(/[^a-zA-Z\s]/g, ' ')
             .split(/\s+/)
             .filter(word => word.length > 0)
             .length;
+
+        if (wordCount < MIN_WORD_COUNT) {
+            console.log(`Word count too low: ${wordCount}`);
+            return null;
+        }
 
         console.log(`Extracted ${cleanContent.length} characters, ${wordCount} words`);
         return {
@@ -267,7 +231,7 @@ async function processArticles(articles) {
             const externalLinkUrl = `https://cryptopanic.com/news/click/${articleId}/`;
             const content = await scrapeArticleContent(page, externalLinkUrl);
 
-            if (content && content.word_count > 50) { // Ensure minimum word count
+            if (content) {
                 results.push({
                     title: article.title,
                     published_at: article.published_at,
